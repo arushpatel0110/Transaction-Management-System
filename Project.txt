@@ -1,0 +1,203 @@
+---------------------------------------------------Transaction Management System-----------------------------------------------
+
+--------------------------------------------------------------table 1---------------------------------------------------------
+
+-- Create a table to store transactions
+CREATE TABLE transactions (
+    transaction_id serial PRIMARY KEY,
+    account_no INT NOT NULL,
+    transaction_type VARCHAR(255) NOT NULL,
+    amount NUMERIC(10, 2) NOT NULL,
+    timestamp TIMESTAMP DEFAULT now(),
+    account_holder_name VARCHAR(255) -- Include account holder's name
+);
+
+select * from transactions;
+
+--------------------------------------------------------------table 2---------------------------------------------------------
+
+-- Create a table to store bank information, including bank accounts
+CREATE TABLE banks (
+    bank_id serial PRIMARY KEY,
+    bank_account_no INT NOT NULL UNIQUE,
+    bank_account_balance NUMERIC(10, 2) DEFAULT 0,
+    phone_number VARCHAR(20) UNIQUE,
+    name varchar(255) not null
+);
+
+-- Sample bank data (for reference)
+-- Sample bank data
+INSERT INTO banks (bank_account_no, phone_number, name) VALUES
+(1001, '111-111-1111', 'Mahesh Patel'),
+(1002, '222-222-2222', 'Suresh Patel'),
+(1003, '333-333-3333', 'Ramesh Patel'),
+(1004, '444-444-4444', 'Naresh Patel'),
+(1005, '555-555-5555', 'Ganesh Patel'),
+(1006, '666-666-6666', 'Shaiyal Patel'),
+(1007, '777-777-7777', 'Chhagan Patel'),
+(1008, '888-888-8888', 'Magan Patel'),
+(1009, '999-999-9999', 'Gagan Patel'),
+(1010, '101-101-1010', 'Virat Kohli');
+
+select * from banks;
+  
+-------------------------------------------Query 1----------------------------------------------------------------------------
+
+-- Update transactions to include customer information
+UPDATE transactions 
+SET account_holder_name = banks.name
+FROM banks
+WHERE transactions.account_no = banks.bank_account_no;
+
+-------------------------------------------Query 2----------------------------------------------------------------------------
+
+-- Create a PL/pgSQL function to perform transactions with security checks
+CREATE OR REPLACE FUNCTION perform_transaction(
+    in_username VARCHAR(255),
+    in_account_no INT,
+    in_transaction_type VARCHAR(255),
+    in_amount NUMERIC(10, 2)
+) RETURNS TEXT AS $$
+DECLARE
+    current_balance numeric;
+    current_name varchar(255);
+BEGIN
+    -- Check if the account exists
+    IF in_transaction_type = 'deposit' THEN
+        -- Check if the bank account exists
+        SELECT bank_account_balance INTO current_balance
+        FROM banks
+        WHERE bank_account_no = in_account_no;
+        
+        IF NOT FOUND THEN
+            RETURN 'Bank account does not exist';
+        END IF;
+
+        -- Perform a deposit into the bank's account
+        UPDATE banks
+        SET bank_account_balance = bank_account_balance + in_amount
+        WHERE bank_account_no = in_account_no;
+
+        -- Record the transaction
+        INSERT INTO transactions (account_no, transaction_type, amount, account_holder_name)
+        VALUES (in_account_no, 'deposit', in_amount, in_username);
+
+        RETURN 'Deposit done successfully';
+    ELSIF in_transaction_type = 'withdraw' THEN
+        -- Check if there's sufficient balance in the bank's account for withdrawal
+        SELECT bank_account_balance INTO current_balance
+        FROM banks
+        WHERE bank_account_no = in_account_no;
+
+        IF NOT FOUND THEN
+            RETURN 'Bank account does not exist';
+        END IF;
+
+        IF current_balance >= in_amount AND in_amount >0 THEN
+            -- Perform a withdrawal from the bank's account
+            UPDATE banks
+            SET bank_account_balance = bank_account_balance - in_amount
+            WHERE bank_account_no = in_account_no;
+
+            -- Record the transaction
+            INSERT INTO transactions (account_no, transaction_type, amount, account_holder_name)
+            VALUES (in_account_no, 'withdraw', in_amount, in_username);
+
+            RETURN 'Withdrawal done successfully';
+        ELSE
+            RETURN 'Insufficient balance for withdrawal';
+        END IF;
+    ELSE
+        RETURN 'Invalid transaction type';
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+select perform_transaction('Mahesh Patel',1001,'deposit',3000);
+select perform_transaction('Mahesh Patel',1001,'withdraw',30);
+-------------------------------------------Query 3----------------------------------------------------------------------------
+
+-- Create a PL/pgSQL procedure to print transaction details between timestamps
+CREATE OR REPLACE PROCEDURE print_transactions_between_timestamps(
+    IN acc_no INT,
+    IN start_timestamp TIMESTAMP,
+    IN end_timestamp TIMESTAMP
+) LANGUAGE plpgsql AS $$
+DECLARE
+    transaction_record RECORD;
+BEGIN
+    RAISE NOTICE 'Transaction Details for Account % between % and %:',
+        acc_no, start_timestamp, end_timestamp;
+
+    -- Query transactions based on account number and timestamps
+    FOR transaction_record IN
+        SELECT *
+        FROM transactions
+        WHERE account_no = acc_no
+        AND timestamp >= start_timestamp
+        AND timestamp <= end_timestamp
+    LOOP
+        RAISE NOTICE 'Transaction ID: %, Type: %, Amount: %, Timestamp: %',
+            transaction_record.transaction_id,
+            transaction_record.transaction_type,
+            transaction_record.amount,
+            transaction_record.timestamp;
+    END LOOP;
+
+    IF NOT FOUND THEN
+        RAISE NOTICE 'No transactions found for Account % between % and %',
+            acc_no, start_timestamp, end_timestamp;
+    END IF;
+END;
+$$;
+
+CALL print_transactions_between_timestamps(1001, '2023-01-01 00:00:00', '2023-12-31 23:59:59');
+
+-------------------------------------------Query 4----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION get_account_holder_details(
+    in_account_no INT,
+    in_name VARCHAR(255)
+) RETURNS TABLE (
+    account_no INT,
+    name VARCHAR(255),
+    phone_number VARCHAR(20),
+    bank_account_balance NUMERIC(10, 2),
+    transaction_id INT,
+    transaction_type VARCHAR(255),
+    transaction_amount NUMERIC(10, 2)
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        banks.bank_account_no AS account_no,
+        banks.name AS name,
+        banks.phone_number AS phone_number,
+        banks.bank_account_balance AS bank_account_balance,
+        transactions.transaction_id AS transaction_id,
+        transactions.transaction_type AS transaction_type,
+        transactions.amount AS transaction_amount
+    FROM
+        banks
+    LEFT JOIN
+        transactions
+    ON
+        banks.bank_account_no = transactions.account_no
+    WHERE
+        banks.bank_account_no = in_account_no
+    AND
+        banks.name = in_name;
+
+    IF NOT FOUND THEN
+        RAISE NOTICE 'No matching records found for Account Number: % and Name: %', in_account_no, in_name;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get account holder details by ID and name
+SELECT * FROM get_account_holder_details(1001, 'Mahesh Patel');
+
+------------------------------------------------------------------------------------------------------------------------------
+select * from banks;
+select * from transactions;
+----------------------------------------------------------------END------------------------------------------------------------
